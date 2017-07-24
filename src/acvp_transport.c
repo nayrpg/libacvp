@@ -415,6 +415,7 @@ ACVP_RESULT acvp_send_register(ACVP_CTX *ctx, char *reg)
 
     rv = acvp_curl_http_post(ctx, url, reg, &acvp_curl_write_register_func);
     if (rv != HTTP_OK) {
+		ACVP_LOG_INFO("\nGrangeskhan was here\n");
         ACVP_LOG_ERR("Unable to register with ACVP server. curl rv=%d\n", rv);
 	ACVP_LOG_ERR("%s\n", ctx->reg_buf);
         return ACVP_TRANSPORT_FAIL;

@@ -1038,7 +1038,6 @@ int main(int argc, char **argv)
      */
     rv = acvp_register(ctx);
     if (rv != ACVP_SUCCESS) {
-	printf("\nGrangeskhan was here\n”);
         printf("Failed to register with ACVP server (rv=%d)\n", rv);
         exit(1);
     }
