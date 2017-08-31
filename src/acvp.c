@@ -1,6 +1,6 @@
 /** @file */
 /*****************************************************************************
-* Copyright (c) 2016, Cisco Systems, Inc.
+* Copyright (c) 2016-2017, Cisco Systems, Inc.
 * All rights reserved.
 
 * Redistribution and use in source and binary forms, with or without modification,
@@ -152,7 +152,8 @@ ACVP_ALG_HANDLER alg_tbl[ACVP_ALG_MAX] = {
     {ACVP_DSA,             &acvp_dsa_kat_handler,   ACVP_ALG_DSA},
     {ACVP_RSA,             &acvp_rsa_kat_handler,   ACVP_ALG_RSA},
     {ACVP_KDF135_TLS,      &acvp_kdf135_tls_kat_handler,  ACVP_ALG_KDF135_TLS},
-    {ACVP_KDF135_SNMP,     &acvp_kdf135_snmp_kat_handler, ACVP_ALG_KDF135_SNMP}
+    {ACVP_KDF135_SNMP,     &acvp_kdf135_snmp_kat_handler, ACVP_ALG_KDF135_SNMP},
+    {ACVP_KDF135_SSH ,     &acvp_kdf135_ssh_kat_handler, ACVP_ALG_KDF135_SSH}
 };
 
 #define ACVP_NUM_PREREQS 5
@@ -521,6 +522,7 @@ ACVP_RESULT acvp_enable_prereq_cap(ACVP_CTX *ctx,
         return ACVP_NO_CAP;
     }
 
+    cap_list->has_prereq = 1;     /* make sure this is set */
     /*
      * Add the value to the cap
      */
@@ -623,21 +625,48 @@ ACVP_RESULT acvp_enable_hash_cap_parm (
     return ACVP_SUCCESS;
 }
 
-ACVP_RESULT acvp_validate_hmac_parm_value(ACVP_HMAC_PARM parm, int value) {
+ACVP_RESULT acvp_validate_hmac_parm_value(ACVP_CIPHER cipher,
+                                          ACVP_HMAC_PARM parm,
+                                          int value) {
   ACVP_RESULT retval = ACVP_INVALID_ARG;
+  int max_val = 0;
 
   switch(parm){
-    case ACVP_HMAC_KEYRANGE1_MIN:
-    case ACVP_HMAC_KEYRANGE1_MAX:
-    case ACVP_HMAC_KEYRANGE2_MIN:
-    case ACVP_HMAC_KEYRANGE2_MAX:
-    case ACVP_HMAC_MACLEN:
-      if (value >= 0 && value <= 65536) {
+    case ACVP_HMAC_KEYLEN_MIN:
+    case ACVP_HMAC_KEYLEN_MAX:
+      if (value >= 8 && value <= 524288) {
         retval = ACVP_SUCCESS;
       }
       break;
-    case ACVP_HMAC_KEYBLOCK:
-      retval = is_valid_tf_param(value);
+    case ACVP_HMAC_MACLEN:
+      switch(cipher){
+        case ACVP_HMAC_SHA1:
+          max_val = 160;
+          break;
+        case ACVP_HMAC_SHA2_224:
+        case ACVP_HMAC_SHA2_512_224:
+        case ACVP_HMAC_SHA3_224:
+          max_val = 224;
+          break;
+        case ACVP_HMAC_SHA2_256:
+        case ACVP_HMAC_SHA2_512_256:
+        case ACVP_HMAC_SHA3_256:
+          max_val = 256;
+          break;
+        case ACVP_HMAC_SHA2_384:
+        case ACVP_HMAC_SHA3_384:
+          max_val = 384;
+          break;
+        case ACVP_HMAC_SHA2_512:
+        case ACVP_HMAC_SHA3_512:
+          max_val = 512;
+          break;
+        default:
+          break;
+      }
+      if (value >= 32 && value <= max_val) {
+        retval = ACVP_SUCCESS;
+      }
       break;
     default:
       break;
@@ -691,25 +720,16 @@ ACVP_RESULT acvp_enable_hmac_cap_parm(
         return ACVP_NO_CAP;
     }
 
-    if (acvp_validate_hmac_parm_value(parm, value) != ACVP_SUCCESS) {
+    if (acvp_validate_hmac_parm_value(cipher, parm, value) != ACVP_SUCCESS) {
       return ACVP_INVALID_ARG;
     }
 
     switch (parm) {
-    case ACVP_HMAC_KEYRANGE1_MIN:
-      cap->cap.hmac_cap->key_range_1[0] = value;
+    case ACVP_HMAC_KEYLEN_MIN:
+      cap->cap.hmac_cap->key_len_min = value;
       break;
-    case ACVP_HMAC_KEYRANGE1_MAX:
-      cap->cap.hmac_cap->key_range_1[1] = value;
-      break;
-    case ACVP_HMAC_KEYRANGE2_MIN:
-      cap->cap.hmac_cap->key_range_2[0] = value;
-      break;
-    case ACVP_HMAC_KEYRANGE2_MAX:
-      cap->cap.hmac_cap->key_range_2[1] = value;
-      break;
-    case ACVP_HMAC_KEYBLOCK:
-      cap->cap.hmac_cap->key_block = value;
+    case ACVP_HMAC_KEYLEN_MAX:
+      cap->cap.hmac_cap->key_len_max = value;
       break;
     case ACVP_HMAC_MACLEN:
       acvp_cap_add_length(&cap->cap.hmac_cap->mac_len, value);
@@ -1128,7 +1148,8 @@ static ACVP_RESULT acvp_validate_prereq_val(ACVP_CIPHER cipher, ACVP_PREREQ_ALG 
             return ACVP_SUCCESS;
         break;
     case ACVP_RSA:
-        if (pre_req == ACVP_PREREQ_SHA)
+        if (pre_req == ACVP_PREREQ_SHA ||
+        	pre_req == ACVP_PREREQ_DRBG)
             return ACVP_SUCCESS;
         break;
     case ACVP_KDF135_TLS:
@@ -1137,6 +1158,13 @@ static ACVP_RESULT acvp_validate_prereq_val(ACVP_CIPHER cipher, ACVP_PREREQ_ALG 
             pre_req == ACVP_PREREQ_HMAC)
             return ACVP_SUCCESS;
         break;
+    case ACVP_KDF135_SSH:
+        if (pre_req == ACVP_PREREQ_SHA ||
+            pre_req == ACVP_PREREQ_TDES ||
+            pre_req == ACVP_PREREQ_AES)
+            return ACVP_SUCCESS;
+        break;
+
     default:
         break;
     }
@@ -1144,6 +1172,79 @@ static ACVP_RESULT acvp_validate_prereq_val(ACVP_CIPHER cipher, ACVP_PREREQ_ALG 
     return ACVP_INVALID_ARG;
 }
 
+/*
+ * Add RSA siggen parameter sigType
+ */
+static ACVP_RESULT acvp_add_rsa_siggen_parm (
+                             ACVP_RSA_CAP_MODE_LIST  *rsa_cap_mode_list,
+                             ACVP_RSA_PARM       param,
+                             ACVP_RSA_SIG_TYPE   value
+                             )
+{
+
+    // TODO: NEED TO ADD VALIDATION here
+
+    switch (param) {
+    case ACVP_SIG_TYPE:
+    	switch (value) {
+    	case RSA_SIG_TYPE_X931:
+    		rsa_cap_mode_list->cap_mode_attrs.siggen->sig_type = RSA_SIG_TYPE_X931_NAME;
+    		break;
+    	case RSA_SIG_TYPE_PKCS1V15:
+			rsa_cap_mode_list->cap_mode_attrs.siggen->sig_type = RSA_SIG_TYPE_PKCS1V15_NAME;
+			break;
+    	case RSA_SIG_TYPE_PKCS1PSS:
+			rsa_cap_mode_list->cap_mode_attrs.siggen->sig_type = RSA_SIG_TYPE_PKCS1PSS_NAME;
+			break;
+		default:
+            break;
+        }
+        break;
+    default:
+        return ACVP_INVALID_ARG;
+        break;
+    }
+    return ACVP_SUCCESS;
+}
+
+/*
+ * Add RSA siggen parameter sigType
+ */
+static ACVP_RESULT acvp_add_rsa_sigver_parm (
+                             ACVP_RSA_CAP_MODE_LIST  *rsa_cap_mode_list,
+                             ACVP_RSA_PARM       param,
+                             ACVP_RSA_SIG_TYPE   value
+                             )
+{
+
+    // TODO: NEED TO ADD VALIDATION here
+
+    switch (param) {
+    case ACVP_SIG_TYPE:
+        switch (value) {
+        case RSA_SIG_TYPE_X931:
+            rsa_cap_mode_list->cap_mode_attrs.sigver->sig_type = RSA_SIG_TYPE_X931_NAME;
+            break;
+        case RSA_SIG_TYPE_PKCS1V15:
+            rsa_cap_mode_list->cap_mode_attrs.sigver->sig_type = RSA_SIG_TYPE_PKCS1V15_NAME;
+            break;
+        case RSA_SIG_TYPE_PKCS1PSS:
+            rsa_cap_mode_list->cap_mode_attrs.sigver->sig_type = RSA_SIG_TYPE_PKCS1PSS_NAME;
+            break;
+        default:
+            break;
+        }
+        break;
+    default:
+        return ACVP_INVALID_ARG;
+        break;
+    }
+    return ACVP_SUCCESS;
+}
+
+/*
+ * Append a RSA pre req val to the list of prereqs
+ */
 static ACVP_RESULT acvp_add_prereq_val(ACVP_CIPHER cipher,
                     ACVP_CAPS_LIST *cap_list,
                     ACVP_PREREQ_ALG pre_req, char *value)
@@ -1246,7 +1347,7 @@ ACVP_RESULT acvp_rsa_prepare_to_add_param(ACVP_CTX *ctx, ACVP_CIPHER cipher,
     if (!*rsa_cap_mode_list) {
         *rsa_cap_mode_list = calloc(1, sizeof(ACVP_RSA_CAP_MODE_LIST));
         if (!*rsa_cap_mode_list) {
-            ACVP_LOG_ERR("Malloc Failed -- enable rsa cap parm");
+            ACVP_LOG_ERR("Malloc Failed -- RSA cap mode list entry");
             return ACVP_MALLOC_FAIL;
         }
 
@@ -1256,11 +1357,25 @@ ACVP_RESULT acvp_rsa_prepare_to_add_param(ACVP_CTX *ctx, ACVP_CIPHER cipher,
         case ACVP_RSA_MODE_KEYGEN:
             (*rsa_cap_mode_list)->cap_mode_attrs.keygen = calloc(1, sizeof(ACVP_RSA_KEYGEN_ATTRS));
             if (!(*rsa_cap_mode_list)->cap_mode_attrs.keygen) {
-                ACVP_LOG_ERR("Malloc Failed -- enable rsa cap parm");
+                ACVP_LOG_ERR("Malloc Failed -- RSA KeyGen cap attributes");
                 return ACVP_MALLOC_FAIL;
             }
             (*rsa_cap_mode_list)->cap_mode_attrs.keygen->rand_pq = 0;
             break;
+        case ACVP_RSA_MODE_SIGGEN:
+			(*rsa_cap_mode_list)->cap_mode_attrs.siggen = calloc(1, sizeof(ACVP_RSA_SIGGEN_ATTRS));
+			if (!(*rsa_cap_mode_list)->cap_mode_attrs.siggen) {
+				ACVP_LOG_ERR("Malloc Failed -- RSA SigGen cap attributes");
+				return ACVP_MALLOC_FAIL;
+			}
+			break;
+        case ACVP_RSA_MODE_SIGVER:
+                    (*rsa_cap_mode_list)->cap_mode_attrs.sigver = calloc(1, sizeof(ACVP_RSA_SIGVER_ATTRS));
+                    if (!(*rsa_cap_mode_list)->cap_mode_attrs.sigver) {
+                        ACVP_LOG_ERR("Malloc Failed -- RSA SigVer cap attributes");
+                        return ACVP_MALLOC_FAIL;
+                    }
+                    break;
         default:
             break;
         }
@@ -1312,6 +1427,14 @@ ACVP_RESULT acvp_validate_rsa_parm_value(ACVP_RSA_PARM parm, int value,
         }
         break;
 
+    case ACVP_SIG_TYPE:
+    	switch (value) {
+		case RSA_SIG_TYPE_X931:
+		case RSA_SIG_TYPE_PKCS1V15:
+		case RSA_SIG_TYPE_PKCS1PSS:
+			retval = ACVP_SUCCESS;
+		}
+		break;
     default:
       break;
   }
@@ -1364,31 +1487,463 @@ ACVP_RESULT acvp_enable_rsa_cap_parm (ACVP_CTX *ctx,
                              int value
                              )
 {
-    ACVP_RSA_CAP_MODE_LIST      *rsa_cap_mode_list;
-    ACVP_CAPS_LIST              *cap_list;
-    ACVP_RESULT                 result;
-    result = acvp_rsa_prepare_to_add_param(ctx, cipher, mode, &cap_list,
-                                           &rsa_cap_mode_list);
-    if(result != ACVP_SUCCESS) return result;
+    ACVP_RSA_CAP_MODE_LIST *rsa_cap_mode_list;
+    ACVP_CAPS_LIST *cap_list;
+    ACVP_RESULT result;
 
-    if (acvp_validate_rsa_parm_value(param, value, rsa_cap_mode_list) != ACVP_SUCCESS) {
-        ACVP_LOG_ERR("Invalid value for specified RSA param");
-        return ACVP_INVALID_ARG;
-    }
     /*
      * Add the value to the cap
      */
+    result = acvp_rsa_prepare_to_add_param(ctx, cipher, mode, &cap_list,
+            &rsa_cap_mode_list);
+    if (result != ACVP_SUCCESS)
+        return result;
+    if (acvp_validate_rsa_parm_value(param, value, rsa_cap_mode_list)
+                != ACVP_SUCCESS) {
+            ACVP_LOG_ERR("Invalid value for specified RSA param");
+            return ACVP_INVALID_ARG;
+        }
     switch (mode) {
     case ACVP_RSA_MODE_KEYGEN:
+
         result = acvp_add_rsa_keygen_parm(rsa_cap_mode_list, param, value);
         if (result != ACVP_SUCCESS)
-            ACVP_LOG_ERR("Invalid param to enable_rsa_cap_parm. If registering primes, use enable_rsa_primes instead");
+            ACVP_LOG_ERR(
+                    "Invalid param to enable_rsa_cap_parm. If registering primes, use enable_rsa_primes instead");
+        break;
+    case ACVP_RSA_MODE_SIGGEN:
+        if (rsa_cap_mode_list->cap_mode_attrs.siggen->sig_type) {
+            rsa_cap_mode_list= acvp_locate_rsa_sig_type_entry(ctx, cap_list, mode,
+                                            value);
+            if (!rsa_cap_mode_list) {
+                return ACVP_INVALID_ARG;
+            }
+        }
+        result = acvp_add_rsa_siggen_parm(rsa_cap_mode_list, param, value);
+        break;
+    case ACVP_RSA_MODE_SIGVER:
+        if (rsa_cap_mode_list->cap_mode_attrs.sigver->sig_type) {
+            rsa_cap_mode_list = acvp_locate_rsa_sig_type_entry(ctx, cap_list, mode,
+        	                    value);
+            if (!rsa_cap_mode_list) {
+                return ACVP_INVALID_ARG;
+            }
+        }
+        result = acvp_add_rsa_sigver_parm(rsa_cap_mode_list, param, value);
+        break;
+    default:
+        ACVP_LOG_ERR("RSA Mode Type Not Found - RSA mode %d is not supported.",mode);
+        return ACVP_INVALID_ARG;
+    }
+
+    return result;
+}
+
+/*
+ * The user should call this after invoking acvp_enable_rsa_cap_parm().
+ */
+ACVP_RESULT acvp_enable_rsa_cap_sig_type_parm (ACVP_CTX *ctx,
+                             ACVP_CIPHER cipher,
+                             ACVP_RSA_MODE mode,
+                             ACVP_RSA_SIG_TYPE sig_type,
+                             int mod,
+                             char *hash
+                             )
+{
+    ACVP_RSA_CAP_MODE_LIST      *rsa_cap_mode_list;
+    ACVP_CAPS_LIST              *cap_list;
+
+    /*
+     * Validate input
+     */
+    if (!ctx) {
+        return ACVP_INVALID_ARG;
+    }
+
+    switch (cipher) {
+    case ACVP_RSA:
         break;
     default:
         return ACVP_INVALID_ARG;
     }
 
-    return (result);
+    /*
+     * Locate this cipher in the caps array
+     */
+    cap_list = acvp_locate_cap_entry(ctx, cipher);
+    if (!cap_list) {
+        ACVP_LOG_ERR("Cap entry not found.");
+        return ACVP_NO_CAP;
+    }
+
+    /*
+     * Locate cap mode from array
+     * if the mode does not exist yet then create it.
+     */
+    if (!cap_list->cap.rsa_cap) {
+        ACVP_LOG_ERR("RSA Cap entry not found.");
+        return ACVP_NO_CAP;
+    }
+    rsa_cap_mode_list = acvp_locate_rsa_sig_type_entry(ctx, cap_list, mode, sig_type);
+    if (!rsa_cap_mode_list) {
+        return ACVP_INVALID_ARG;
+    }
+    // TODO CHECK PARAMS BEFORE DOING ALL THIS LOOKUP
+    int found = 0;
+    ACVP_RSA_CAP_SIG_TYPE *current_cap_sig_type = NULL;
+    if(mode==ACVP_RSA_MODE_SIGGEN)
+    {
+        if(!rsa_cap_mode_list->cap_mode_attrs.siggen->cap_sig_type) {
+          rsa_cap_mode_list->cap_mode_attrs.siggen->cap_sig_type = calloc(1, sizeof(ACVP_RSA_CAP_SIG_TYPE));
+          if(!rsa_cap_mode_list->cap_mode_attrs.siggen->cap_sig_type) {
+              ACVP_LOG_ERR("Malloc Failed -- RSA SigGen cap sig type entry");
+              return ACVP_MALLOC_FAIL;
+          }
+          rsa_cap_mode_list->cap_mode_attrs.siggen->cap_sig_type->mod_rsa_sig = mod;
+          current_cap_sig_type = rsa_cap_mode_list->cap_mode_attrs.siggen->cap_sig_type;
+
+        } else {
+            current_cap_sig_type = rsa_cap_mode_list->cap_mode_attrs.siggen->cap_sig_type;
+
+            int found = 0;
+            do {
+                if(current_cap_sig_type->mod_rsa_sig != mod) {
+                    if(current_cap_sig_type->next == NULL) {
+                        current_cap_sig_type->next = calloc(1, sizeof(ACVP_RSA_CAP_SIG_TYPE));
+                        if(!current_cap_sig_type->next) {
+                            ACVP_LOG_ERR("Malloc Failed -- RSA SigGen cap sig type entry");
+                            return ACVP_MALLOC_FAIL;
+                        }
+                        current_cap_sig_type = current_cap_sig_type->next;
+                        current_cap_sig_type->mod_rsa_sig = mod;
+                        found = 1;
+                    } else {
+                        current_cap_sig_type = current_cap_sig_type->next;
+                    }
+                } else {
+                    found = 1;
+                }
+            } while (!found);
+        }
+
+        ACVP_NAME_LIST *current_hash = NULL;
+        if(!current_cap_sig_type->compatible_hashes_sig) {
+            current_cap_sig_type->compatible_hashes_sig = calloc(1, sizeof(ACVP_NAME_LIST));
+            if(!current_cap_sig_type->compatible_hashes_sig) {
+                ACVP_LOG_ERR("Malloc Failed -- RSA SigGen compatible hashes entry");
+                return ACVP_MALLOC_FAIL;
+            }
+            current_cap_sig_type->compatible_hashes_sig->name = hash;
+        } else {
+            current_hash = current_cap_sig_type->compatible_hashes_sig;
+            while(current_hash->next != NULL) {
+                current_hash = current_hash->next;
+            }
+            current_hash->next = calloc(1, sizeof(ACVP_NAME_LIST));
+            if(!current_hash->next) {
+                ACVP_LOG_ERR("Malloc Failed -- RSA SigGen compatible hashes entry");
+                return ACVP_MALLOC_FAIL;
+            }
+            current_hash->next->name = hash;
+        }
+    }
+    else if (mode == ACVP_RSA_MODE_SIGVER)
+    {
+        if(!rsa_cap_mode_list->cap_mode_attrs.sigver->cap_sig_type) {
+              rsa_cap_mode_list->cap_mode_attrs.sigver->cap_sig_type = calloc(1, sizeof(ACVP_RSA_CAP_SIG_TYPE));
+              if(!rsa_cap_mode_list->cap_mode_attrs.sigver->cap_sig_type) {
+                  ACVP_LOG_ERR("Malloc Failed -- RSA SigVer cap sig type entry");
+                  return ACVP_MALLOC_FAIL;
+              }
+              rsa_cap_mode_list->cap_mode_attrs.sigver->cap_sig_type->mod_rsa_sig = mod;
+              current_cap_sig_type = rsa_cap_mode_list->cap_mode_attrs.sigver->cap_sig_type;
+
+            } else {
+                current_cap_sig_type = rsa_cap_mode_list->cap_mode_attrs.sigver->cap_sig_type;
+
+                int found = 0;
+                do {
+                    if(current_cap_sig_type->mod_rsa_sig != mod) {
+                        if(current_cap_sig_type->next == NULL) {
+                            current_cap_sig_type->next = calloc(1, sizeof(ACVP_RSA_CAP_SIG_TYPE));
+                            if(!current_cap_sig_type->next) {
+                                ACVP_LOG_ERR("Malloc Failed -- RSA SigVer cap sig type entry");
+                                return ACVP_MALLOC_FAIL;
+                            }
+                            current_cap_sig_type = current_cap_sig_type->next;
+                            current_cap_sig_type->mod_rsa_sig = mod;
+                            found = 1;
+                        } else {
+                            current_cap_sig_type = current_cap_sig_type->next;
+                        }
+                    } else {
+                        found = 1;
+                    }
+                } while (!found);
+            }
+
+            ACVP_NAME_LIST *current_hash = NULL;
+            if(!current_cap_sig_type->compatible_hashes_sig) {
+                current_cap_sig_type->compatible_hashes_sig = calloc(1, sizeof(ACVP_NAME_LIST));
+                if(!current_cap_sig_type->compatible_hashes_sig) {
+                    ACVP_LOG_ERR("Malloc Failed -- RSA SigVer compatible hashes entry");
+                    return ACVP_MALLOC_FAIL;
+                }
+                current_cap_sig_type->compatible_hashes_sig->name = hash;
+            } else {
+                current_hash = current_cap_sig_type->compatible_hashes_sig;
+                while(current_hash->next != NULL) {
+                    current_hash = current_hash->next;
+                }
+                current_hash->next = calloc(1, sizeof(ACVP_NAME_LIST));
+                if(!current_hash->next) {
+                    ACVP_LOG_ERR("Malloc Failed -- RSA SigVer compatible hashes entry");
+                    return ACVP_MALLOC_FAIL;
+                }
+                current_hash->next->name = hash;
+            }
+    }
+    else
+    {
+        return (ACVP_INVALID_ARG);
+    }
+    return (ACVP_SUCCESS);
+}
+
+/*
+ * The user should call this after invoking acvp_enable_rsa_cap_parm().
+ */
+ACVP_RESULT acvp_enable_rsa_cap_sig_type_salt_parm (ACVP_CTX *ctx,
+                             ACVP_CIPHER cipher,
+                             ACVP_RSA_MODE mode,
+                             ACVP_RSA_SIG_TYPE sig_type,
+                             int mod,
+                             char *hash,
+							 int salt
+                             )
+{
+    ACVP_RSA_CAP_MODE_LIST      *rsa_cap_mode_list;
+    ACVP_CAPS_LIST              *cap_list;
+
+    /*
+     * Validate input
+     */
+    if (!ctx) {
+        return ACVP_INVALID_ARG;
+    }
+
+    switch (cipher) {
+    case ACVP_RSA:
+        break;
+    default:
+        return ACVP_INVALID_ARG;
+    }
+
+    /*
+     * Locate this cipher in the caps array
+     */
+    cap_list = acvp_locate_cap_entry(ctx, cipher);
+    if (!cap_list) {
+        ACVP_LOG_ERR("Cap entry not found.");
+        return ACVP_NO_CAP;
+    }
+
+    /*
+     * Locate cap mode from array
+     * if the mode does not exist yet then create it.
+     */
+    if (!cap_list->cap.rsa_cap) {
+        ACVP_LOG_ERR("RSA Cap entry not found.");
+        return ACVP_NO_CAP;
+    }
+    rsa_cap_mode_list = acvp_locate_rsa_sig_type_entry(ctx, cap_list, mode, sig_type);
+    if (!rsa_cap_mode_list) {
+        return ACVP_INVALID_ARG;
+    }
+
+    // TODO CHECK PARAMS BEFORE DOING ALL THIS LOOKUP
+    int found = 0;
+    ACVP_RSA_CAP_SIG_TYPE *current_cap_sig_type = NULL;
+    if (mode == ACVP_RSA_MODE_SIGGEN) {
+        if (!rsa_cap_mode_list->cap_mode_attrs.siggen->cap_sig_type) {
+            rsa_cap_mode_list->cap_mode_attrs.siggen->cap_sig_type = calloc(1,
+                    sizeof(ACVP_RSA_CAP_SIG_TYPE));
+            if (!rsa_cap_mode_list->cap_mode_attrs.siggen->cap_sig_type) {
+                ACVP_LOG_ERR("Malloc Failed -- RSA SigGen cap sig type entry");
+                return ACVP_MALLOC_FAIL;
+            }
+            rsa_cap_mode_list->cap_mode_attrs.siggen->cap_sig_type->mod_rsa_sig =
+                    mod;
+            current_cap_sig_type =
+                    rsa_cap_mode_list->cap_mode_attrs.siggen->cap_sig_type;
+
+        } else {
+            current_cap_sig_type =
+                    rsa_cap_mode_list->cap_mode_attrs.siggen->cap_sig_type;
+
+            int found = 0;
+            do {
+                if (current_cap_sig_type->mod_rsa_sig != mod) {
+                    if (current_cap_sig_type->next == NULL) {
+                        current_cap_sig_type->next = calloc(1,
+                                sizeof(ACVP_RSA_CAP_SIG_TYPE));
+                        if (!current_cap_sig_type->next) {
+                            ACVP_LOG_ERR(
+                                    "Malloc Failed -- RSA SigGen cap sig type entry");
+                            return ACVP_MALLOC_FAIL;
+                        }
+                        current_cap_sig_type = current_cap_sig_type->next;
+                        current_cap_sig_type->mod_rsa_sig = mod;
+                        found = 1;
+                    } else {
+                        current_cap_sig_type = current_cap_sig_type->next;
+                    }
+                } else {
+                    found = 1;
+                }
+            } while (!found);
+        }
+
+        ACVP_NAME_LIST *current_hash = NULL;
+        if (!current_cap_sig_type->compatible_hashes_sig) {
+            current_cap_sig_type->compatible_hashes_sig = calloc(1,
+                    sizeof(ACVP_NAME_LIST));
+            if (!current_cap_sig_type->compatible_hashes_sig) {
+                ACVP_LOG_ERR("Malloc Failed -- RSA SigGen compatible hashes entry");
+                return ACVP_MALLOC_FAIL;
+            }
+            current_cap_sig_type->compatible_hashes_sig->name = hash;
+        } else {
+            current_hash = current_cap_sig_type->compatible_hashes_sig;
+            while (current_hash->next != NULL) {
+                current_hash = current_hash->next;
+            }
+            current_hash->next = calloc(1, sizeof(ACVP_NAME_LIST));
+            if (!current_hash->next) {
+                ACVP_LOG_ERR("Malloc Failed -- RSA SigGen compatible hashes entry");
+                return ACVP_MALLOC_FAIL;
+            }
+            current_hash->next->name = hash;
+        }
+
+        // checks that sigType is "PKCS1PSS" before creating salt array
+        // this check should be unnecessary, since this function should only be called when sigType is "PKCS1PSS"
+        if (strncmp(rsa_cap_mode_list->cap_mode_attrs.siggen->sig_type,
+                RSA_SIG_TYPE_PKCS1PSS_NAME, RSA_SIG_TYPE_MAX_LEN) == 0) {
+            ACVP_SALT_SIZES *current_salt = NULL;
+            if (!current_cap_sig_type->salt_sig) {
+                current_cap_sig_type->salt_sig = calloc(1,
+                        sizeof(ACVP_SALT_SIZES));
+                if (!current_cap_sig_type->salt_sig) {
+                    ACVP_LOG_ERR("Malloc Failed -- RSA SigGen salt size entry");
+                    return ACVP_MALLOC_FAIL;
+                }
+                current_cap_sig_type->salt_sig->saltVal = salt;
+            } else {
+                current_salt = current_cap_sig_type->salt_sig;
+                while (current_salt->next != NULL) {
+                    current_salt = current_salt->next;
+                }
+                current_salt->next = calloc(1, sizeof(ACVP_SALT_SIZES));
+                if (!current_salt->next) {
+                    ACVP_LOG_ERR("Malloc Failed -- RSA SigGen salt size entry");
+                    return ACVP_MALLOC_FAIL;
+                }
+                current_salt->next->saltVal = salt;
+            }
+        }
+    } else if (mode == ACVP_RSA_MODE_SIGVER) {
+        if (!rsa_cap_mode_list->cap_mode_attrs.sigver->cap_sig_type) {
+                    rsa_cap_mode_list->cap_mode_attrs.sigver->cap_sig_type = calloc(1,
+                            sizeof(ACVP_RSA_CAP_SIG_TYPE));
+                    if (!rsa_cap_mode_list->cap_mode_attrs.sigver->cap_sig_type) {
+                        ACVP_LOG_ERR("Malloc Failed -- RSA SigVer cap sig type entry");
+                        return ACVP_MALLOC_FAIL;
+                    }
+                    rsa_cap_mode_list->cap_mode_attrs.siggen->cap_sig_type->mod_rsa_sig =
+                            mod;
+                    current_cap_sig_type =
+                            rsa_cap_mode_list->cap_mode_attrs.sigver->cap_sig_type;
+
+                } else {
+                    current_cap_sig_type =
+                            rsa_cap_mode_list->cap_mode_attrs.sigver->cap_sig_type;
+
+                    int found = 0;
+                    do {
+                        if (current_cap_sig_type->mod_rsa_sig != mod) {
+                            if (current_cap_sig_type->next == NULL) {
+                                current_cap_sig_type->next = calloc(1,
+                                        sizeof(ACVP_RSA_CAP_SIG_TYPE));
+                                if (!current_cap_sig_type->next) {
+                                    ACVP_LOG_ERR(
+                                            "Malloc Failed -- RSA SigVer cap sig type entry");
+                                    return ACVP_MALLOC_FAIL;
+                                }
+                                current_cap_sig_type = current_cap_sig_type->next;
+                                current_cap_sig_type->mod_rsa_sig = mod;
+                                found = 1;
+                            } else {
+                                current_cap_sig_type = current_cap_sig_type->next;
+                            }
+                        } else {
+                            found = 1;
+                        }
+                    } while (!found);
+                }
+
+                ACVP_NAME_LIST *current_hash = NULL;
+                if (!current_cap_sig_type->compatible_hashes_sig) {
+                    current_cap_sig_type->compatible_hashes_sig = calloc(1,
+                            sizeof(ACVP_NAME_LIST));
+                    if (!current_cap_sig_type->compatible_hashes_sig) {
+                        ACVP_LOG_ERR("Malloc Failed -- RSA SigVer compatible hashes entry");
+                        return ACVP_MALLOC_FAIL;
+                    }
+                    current_cap_sig_type->compatible_hashes_sig->name = hash;
+                } else {
+                    current_hash = current_cap_sig_type->compatible_hashes_sig;
+                    while (current_hash->next != NULL) {
+                        current_hash = current_hash->next;
+                    }
+                    current_hash->next = calloc(1, sizeof(ACVP_NAME_LIST));
+                    if (!current_hash->next) {
+                        ACVP_LOG_ERR("Malloc Failed -- RSA SigVer compatible hashes entry");
+                        return ACVP_MALLOC_FAIL;
+                    }
+                    current_hash->next->name = hash;
+                }
+
+                // checks that sigType is "PKCS1PSS" before creating salt array
+                // this check should be unnecessary, since this function should only be called when sigType is "PKCS1PSS"
+                if (strncmp(rsa_cap_mode_list->cap_mode_attrs.sigver->sig_type,
+                        RSA_SIG_TYPE_PKCS1PSS_NAME, RSA_SIG_TYPE_MAX_LEN) == 0) {
+                    ACVP_SALT_SIZES *current_salt = NULL;
+                    if (!current_cap_sig_type->salt_sig) {
+                        current_cap_sig_type->salt_sig = calloc(1,
+                                sizeof(ACVP_SALT_SIZES));
+                        if (!current_cap_sig_type->salt_sig) {
+                            ACVP_LOG_ERR("Malloc Failed -- RSA SigVer salt size entry");
+                            return ACVP_MALLOC_FAIL;
+                        }
+                        current_cap_sig_type->salt_sig->saltVal = salt;
+                    } else {
+                        current_salt = current_cap_sig_type->salt_sig;
+                        while (current_salt->next != NULL) {
+                            current_salt = current_salt->next;
+                        }
+                        current_salt->next = calloc(1, sizeof(ACVP_SALT_SIZES));
+                        if (!current_salt->next) {
+                            ACVP_LOG_ERR("Malloc Failed -- RSA SigVer salt size entry");
+                            return ACVP_MALLOC_FAIL;
+                        }
+                        current_salt->next->saltVal = salt;
+                    }
+                }
+    } else {
+        return (ACVP_INVALID_ARG);
+    }
+    return (ACVP_SUCCESS);
 }
 
 /*
@@ -1974,6 +2529,7 @@ static ACVP_RESULT acvp_lookup_prereqVals (JSON_Object *cap_obj, ACVP_CAPS_LIST 
 
     if(!cap_entry) return ACVP_INVALID_ARG;
 
+    if (!cap_entry->has_prereq) return ACVP_SUCCESS;
     /*
      * Init json array
      */
@@ -2021,6 +2577,8 @@ static ACVP_RESULT acvp_build_hash_register_cap(JSON_Object *cap_obj, ACVP_CAPS_
 static ACVP_RESULT acvp_build_hmac_register_cap(JSON_Object *cap_obj, ACVP_CAPS_LIST *cap_entry)
 {
     JSON_Array *temp_arr = NULL;
+    JSON_Value *val = NULL;
+    JSON_Object *obj = NULL;
     ACVP_SL_LIST *sl_list;
     ACVP_RESULT result;
 
@@ -2028,18 +2586,17 @@ static ACVP_RESULT acvp_build_hmac_register_cap(JSON_Object *cap_obj, ACVP_CAPS_
     result = acvp_lookup_prereqVals(cap_obj, cap_entry);
     if (result != ACVP_SUCCESS) return result;
 
-    json_object_set_value(cap_obj, "keyRange1", json_value_init_array());
-    temp_arr = json_object_get_array(cap_obj, "keyRange1");
-    json_array_append_number(temp_arr, cap_entry->cap.hmac_cap->key_range_1[0]);
-    json_array_append_number(temp_arr, cap_entry->cap.hmac_cap->key_range_1[1]);
+    json_object_set_value(cap_obj, "keyLen", json_value_init_array());
+    temp_arr = json_object_get_array(cap_obj, "keyLen");
 
-    json_object_set_value(cap_obj, "keyRange2", json_value_init_array());
-    temp_arr = json_object_get_array(cap_obj, "keyRange2");
-    json_array_append_number(temp_arr, cap_entry->cap.hmac_cap->key_range_2[0]);
-    json_array_append_number(temp_arr, cap_entry->cap.hmac_cap->key_range_2[1]);
+    val = json_value_init_object();
+    obj = json_value_get_object(val);
 
-    json_object_set_boolean(cap_obj, "keyBlock", cap_entry->cap.hmac_cap->key_block);
+    json_object_set_number(obj, "min", cap_entry->cap.hmac_cap->key_len_min);
+    json_object_set_number(obj, "max", cap_entry->cap.hmac_cap->key_len_max);
+    json_object_set_number(obj, "increment", 8);
 
+    json_array_append_value(temp_arr, val);
     /*
      * Set the supported mac lengths
      */
@@ -2205,7 +2762,15 @@ static ACVP_RESULT acvp_build_sym_cipher_register_cap(JSON_Object *cap_obj, ACVP
     case ACVP_TDES_CFBP8:
     case ACVP_TDES_CFBP64:
     case ACVP_TDES_CTR:
-  	case ACVP_TDES_KW:
+    case ACVP_TDES_KW:
+    case ACVP_AES_ECB:
+    case ACVP_AES_CFB1:
+    case ACVP_AES_CFB8:
+    case ACVP_AES_CFB128:
+    case ACVP_AES_OFB:
+    case ACVP_AES_CBC:
+    case ACVP_AES_KW:
+    case ACVP_AES_CTR:
         break;
     default:
         json_object_set_value(cap_obj, "ivLen", json_value_init_array());
@@ -2487,6 +3052,125 @@ static ACVP_RESULT acvp_lookup_rsa_primes(JSON_Object *cap_obj, ACVP_RSA_CAP *rs
     return ACVP_SUCCESS;
 }
 
+static ACVP_RESULT acvp_lookup_rsa_cap_sig_type(JSON_Object *cap_obj, ACVP_RSA_CAP_MODE_LIST *mode_list)
+{
+    JSON_Array *mod_rsa_sig_array = NULL, *hash_sig_array = NULL;
+
+    ACVP_RSA_CAP_SIG_TYPE *type, *next_type;
+    ACVP_NAME_LIST *comp_hash, *next_hash;
+
+    if(!mode_list) return ACVP_INVALID_ARG;
+
+    /*
+     * Init json array
+     */
+    if(mode_list->cap_mode==ACVP_RSA_MODE_SIGGEN)
+    {
+        json_object_set_value(cap_obj, "capSigType", json_value_init_array());
+        mod_rsa_sig_array = json_object_get_array(cap_obj, "capSigType");
+
+        /*
+         * return OK if nothing present
+         */
+        type = mode_list->cap_mode_attrs.siggen->cap_sig_type;
+        if(!mode_list->cap_mode_attrs.siggen->cap_sig_type) {
+            return ACVP_SUCCESS;
+        }
+
+
+        while (type) {
+            JSON_Value *val = NULL;
+            JSON_Object *obj = NULL;
+            val = json_value_init_object();
+            obj = json_value_get_object(val);
+
+            json_object_set_number(obj, "modulo", type->mod_rsa_sig);
+            json_object_set_value(obj, ACVP_RSA_HASHALG_OBJ_NAME, json_value_init_array());
+            hash_sig_array = json_object_get_array(obj, ACVP_RSA_HASHALG_OBJ_NAME);
+            comp_hash = type->compatible_hashes_sig;
+
+            while(comp_hash) {
+                json_array_append_string(hash_sig_array, comp_hash->name);
+                next_hash = comp_hash->next;
+                comp_hash = next_hash;
+            }
+
+            // only print saltSigGen if sigType is "PKCS1PSS"
+            if(strncmp(mode_list->cap_mode_attrs.siggen->sig_type, RSA_SIG_TYPE_PKCS1PSS_NAME, RSA_SIG_TYPE_MAX_LEN ) == 0 ) {
+                ACVP_SALT_SIZES *salt, *next_salt;
+                JSON_Array *salt_sig_array = NULL;
+
+                json_object_set_value(obj, ACVP_RSA_SALTLEN_OBJ_NAME, json_value_init_array());
+                salt_sig_array = json_object_get_array(obj, ACVP_RSA_SALTLEN_OBJ_NAME);
+                salt = type->salt_sig;
+
+                while(salt) {
+                    json_array_append_number(salt_sig_array, salt->saltVal);
+                    next_salt = salt->next;
+                    salt = next_salt;
+                }
+
+            }
+            json_array_append_value(mod_rsa_sig_array, val);
+            next_type = type->next;
+            type = next_type;
+        }
+    }
+    else if(mode_list->cap_mode==ACVP_RSA_MODE_SIGVER)
+    {
+        json_object_set_value(cap_obj, "capSigType", json_value_init_array());
+        mod_rsa_sig_array = json_object_get_array(cap_obj, "capSigType");
+
+        /*
+         * return OK if nothing present
+         */
+        type = mode_list->cap_mode_attrs.sigver->cap_sig_type;
+        if(!mode_list->cap_mode_attrs.sigver->cap_sig_type) {
+            return ACVP_SUCCESS;
+        }
+
+
+        while (type) {
+            JSON_Value *val = NULL;
+            JSON_Object *obj = NULL;
+            val = json_value_init_object();
+            obj = json_value_get_object(val);
+
+            json_object_set_number(obj, "modulo", type->mod_rsa_sig);
+            json_object_set_value(obj, ACVP_RSA_HASHALG_OBJ_NAME, json_value_init_array());
+            hash_sig_array = json_object_get_array(obj, ACVP_RSA_HASHALG_OBJ_NAME);
+            comp_hash = type->compatible_hashes_sig;
+
+            while(comp_hash) {
+                json_array_append_string(hash_sig_array, comp_hash->name);
+                next_hash = comp_hash->next;
+                comp_hash = next_hash;
+            }
+
+            // only print saltSigVer if sigType is "PKCS1PSS"
+            if(strncmp(mode_list->cap_mode_attrs.sigver->sig_type, RSA_SIG_TYPE_PKCS1PSS_NAME, RSA_SIG_TYPE_MAX_LEN ) == 0 ) {
+                ACVP_SALT_SIZES *salt, *next_salt;
+                JSON_Array *salt_sig_array = NULL;
+
+                json_object_set_value(obj, ACVP_RSA_SALTLEN_OBJ_NAME, json_value_init_array());
+                salt_sig_array = json_object_get_array(obj, ACVP_RSA_SALTLEN_OBJ_NAME);
+                salt = type->salt_sig;
+
+                while(salt) {
+                    json_array_append_number(salt_sig_array, salt->saltVal);
+                    next_salt = salt->next;
+                    salt = next_salt;
+                }
+
+            }
+            json_array_append_value(mod_rsa_sig_array, val);
+            next_type = type->next;
+            type = next_type;
+        }
+    }
+    return ACVP_SUCCESS;
+}
+
 static char *acvp_lookup_rsa_mode_string (ACVP_RSA_MODE mode)
 {
     char *mode_str = NULL;
@@ -2494,6 +3178,12 @@ static char *acvp_lookup_rsa_mode_string (ACVP_RSA_MODE mode)
     case ACVP_RSA_MODE_KEYGEN:
         mode_str = ACVP_RSA_KEYGEN;
         break;
+    case ACVP_RSA_MODE_SIGGEN:
+		mode_str = ACVP_RSA_SIGGEN;
+		break;
+    case ACVP_RSA_MODE_SIGVER:
+            mode_str = ACVP_RSA_SIGVER;
+            break;
     default:
         return NULL;
     }
@@ -2519,52 +3209,79 @@ static ACVP_RESULT acvp_build_rsa_keygen_register(JSON_Object **cap_specs_obj, A
     return result;
 }
 
+static ACVP_RESULT acvp_build_rsa_siggen_register(JSON_Object **cap_specs_obj, ACVP_RSA_CAP_MODE_LIST *mode_list) {
+    ACVP_RSA_SIGGEN_ATTRS *rsa_cap_mode = NULL;
+    rsa_cap_mode = mode_list->cap_mode_attrs.siggen;
+    json_object_set_string(*cap_specs_obj, "sigType", rsa_cap_mode->sig_type);
+
+    return acvp_lookup_rsa_cap_sig_type(*cap_specs_obj, mode_list);
+}
+
+static ACVP_RESULT acvp_build_rsa_sigver_register(JSON_Object **cap_specs_obj, ACVP_RSA_CAP_MODE_LIST *mode_list) {
+    ACVP_RSA_SIGVER_ATTRS *rsa_cap_mode = NULL;
+    rsa_cap_mode = mode_list->cap_mode_attrs.sigver;
+    json_object_set_string(*cap_specs_obj, "sigType", rsa_cap_mode->sig_type);
+
+    return acvp_lookup_rsa_cap_sig_type(*cap_specs_obj, mode_list);
+}
+
 static ACVP_RESULT acvp_build_rsa_register_cap(JSON_Object *cap_obj, ACVP_CAPS_LIST *cap_entry)
 {
-    ACVP_RESULT result;
-    ACVP_RSA_MODE mode;
+	ACVP_RESULT result;
+	ACVP_RSA_MODE mode;
 
-    JSON_Array *specs_array = NULL;
-    JSON_Value *mode_specs_val = NULL, *cap_specs_val = NULL, *mode_val = NULL;
-    JSON_Object *mode_specs_obj = NULL, *cap_specs_obj = NULL, *mode_obj = NULL;
+	JSON_Array *specs_array = NULL;
+	JSON_Value *mode_specs_val = NULL, *cap_specs_val = NULL, *mode_val = NULL;
+	JSON_Object *mode_specs_obj = NULL, *cap_specs_obj = NULL, *mode_obj = NULL;
 
-    json_object_set_string(cap_obj, "algorithm", acvp_lookup_cipher_name(cap_entry->cipher));
-    result = acvp_lookup_prereqVals(cap_obj, cap_entry);
-    if (result != ACVP_SUCCESS) return result;
+	json_object_set_string(cap_obj, "algorithm", acvp_lookup_cipher_name(cap_entry->cipher));
+	result = acvp_lookup_prereqVals(cap_obj, cap_entry);
+	if (result != ACVP_SUCCESS) return result;
 
-    json_object_set_value(cap_obj, "algSpecs", json_value_init_array());
-    specs_array = json_object_get_array(cap_obj, "algSpecs");
+	json_object_set_value(cap_obj, "algSpecs", json_value_init_array());
+	specs_array = json_object_get_array(cap_obj, "algSpecs");
 
-    mode_specs_val = json_value_init_object();
-    mode_specs_obj = json_value_get_object(mode_specs_val);
+	ACVP_RSA_CAP_MODE_LIST *mode_list = cap_entry->cap.rsa_cap->rsa_cap_mode_list;
+	while(mode_list)
+	{
+	    mode = mode_list->cap_mode;
+	    char *mode_str = acvp_lookup_rsa_mode_string(mode);
+        if (!mode_str)
+            return ACVP_INVALID_ARG;
 
-    mode_val = json_value_init_object();
-    mode_obj = json_value_get_object(mode_val);
+	    mode_specs_val = json_value_init_object();
+        mode_specs_obj = json_value_get_object(mode_specs_val);
 
-    // TODO : this chunk here only prints out one keygen capability...
-    // this assumes there is only one item in rsa_cap_mode_list
-    mode = cap_entry->cap.rsa_cap->rsa_cap_mode_list->cap_mode;
-    char *mode_str = acvp_lookup_rsa_mode_string(mode);
-    if (!mode_str) return ACVP_INVALID_ARG;
+        mode_val = json_value_init_object();
+        mode_obj = json_value_get_object(mode_val);
 
-    cap_specs_val = json_value_init_object();
-    cap_specs_obj = json_value_get_object(cap_specs_val);
+	    cap_specs_val = json_value_init_object();
+	    cap_specs_obj = json_value_get_object(cap_specs_val);
 
-    switch(mode) {
-    case ACVP_RSA_MODE_KEYGEN:
-        result = acvp_build_rsa_keygen_register(&cap_specs_obj, cap_entry);
-        if (result != ACVP_SUCCESS) return result;
-        break;
-    default:
-        break;
-    }
+	    switch(mode) {
+	    case ACVP_RSA_MODE_KEYGEN:
+	        result = acvp_build_rsa_keygen_register(&cap_specs_obj, cap_entry);
+	        if (result != ACVP_SUCCESS) return result;
+	        break;
+	    case ACVP_RSA_MODE_SIGGEN:
+	        result = acvp_build_rsa_siggen_register(&cap_specs_obj, mode_list);
+	        if (result != ACVP_SUCCESS) return result;
+	        break;
+	    case ACVP_RSA_MODE_SIGVER:
+	        result = acvp_build_rsa_sigver_register(&cap_specs_obj, mode_list);
+	        if (result != ACVP_SUCCESS) return result;
+	        break;
+	    default:
+            return ACVP_INVALID_ARG;
+	    }
 
-    json_object_set_string(mode_obj, "mode", mode_str);
-    json_object_set_value(mode_obj, "capSpecs", cap_specs_val);
-    json_object_set_value(mode_specs_obj, "modeSpecs", mode_val);
-    json_array_append_value(specs_array, mode_specs_val);
-
-    return ACVP_SUCCESS;
+	    json_object_set_string(mode_obj, "mode", mode_str);
+	    json_object_set_value(mode_obj, "capSpecs", cap_specs_val);
+	    json_object_set_value(mode_specs_obj, "modeSpecs", mode_val);
+	    json_array_append_value(specs_array, mode_specs_val);
+	    mode_list = mode_list->next;
+	}
+	return ACVP_SUCCESS;
 }
 
 static ACVP_RESULT acvp_build_kdf135_tls_register_cap(JSON_Object *cap_obj, ACVP_CAPS_LIST *cap_entry)
@@ -2604,6 +3321,41 @@ static ACVP_RESULT acvp_build_kdf135_snmp_register_cap(JSON_Object *cap_obj, ACV
 {
     ACVP_RESULT result;
     json_object_set_string(cap_obj, "algorithm", acvp_lookup_cipher_name(cap_entry->cipher));
+
+    result = acvp_lookup_prereqVals(cap_obj, cap_entry);
+    if(result != ACVP_SUCCESS) return result;
+
+    return ACVP_SUCCESS;
+}
+
+static ACVP_RESULT acvp_build_kdf135_ssh_register_cap(JSON_Object *cap_obj, ACVP_CAPS_LIST *cap_entry)
+{
+    JSON_Array *temp_arr = NULL;
+    ACVP_RESULT result;
+
+    json_object_set_string(cap_obj, "algorithm", acvp_lookup_cipher_name(cap_entry->cipher));
+    json_object_set_value(cap_obj, "methods", json_value_init_array());
+    temp_arr = json_object_get_array(cap_obj, "methods");
+    if (cap_entry->cap.kdf135_ssh_cap->method[0] == ACVP_SSH_METH_TDES_CBC)
+        json_array_append_string(temp_arr, "TDES-CBC");
+
+    if (cap_entry->cap.kdf135_ssh_cap->method[1] == ACVP_SSH_METH_AES_128_CBC)
+        json_array_append_string(temp_arr, "AES-128-CBC");
+
+    if (cap_entry->cap.kdf135_ssh_cap->method[2] == ACVP_SSH_METH_AES_192_CBC)
+        json_array_append_string(temp_arr, "AES-192-CBC");
+
+    if (cap_entry->cap.kdf135_ssh_cap->method[3] == ACVP_SSH_METH_AES_256_CBC)
+        json_array_append_string(temp_arr, "AES-256-CBC");
+
+    json_object_set_value(cap_obj, "sha", json_value_init_array());
+    temp_arr = json_object_get_array(cap_obj, "sha");
+    if (cap_entry->cap.kdf135_ssh_cap->sha & ACVP_KDF135_SSH_CAP_SHA256)
+        json_array_append_string(temp_arr, "SHA-256");
+    if (cap_entry->cap.kdf135_ssh_cap->sha & ACVP_KDF135_SSH_CAP_SHA384)
+        json_array_append_string(temp_arr, "SHA-384");
+    if (cap_entry->cap.kdf135_ssh_cap->sha & ACVP_KDF135_SSH_CAP_SHA512)
+        json_array_append_string(temp_arr, "SHA-512");
 
     result = acvp_lookup_prereqVals(cap_obj, cap_entry);
     if(result != ACVP_SUCCESS) return result;
@@ -2944,6 +3696,9 @@ static ACVP_RESULT acvp_build_register(ACVP_CTX *ctx, char **reg)
             case ACVP_KDF135_SNMP:
                 acvp_build_kdf135_snmp_register_cap(cap_obj, cap_entry);
                 break;
+            case ACVP_KDF135_SSH:
+                acvp_build_kdf135_ssh_register_cap(cap_obj, cap_entry);
+                break;
             default:
                 ACVP_LOG_ERR("Cap entry not found, %d.", cap_entry->cipher);
                 return ACVP_NO_CAP;
@@ -2998,7 +3753,7 @@ ACVP_RESULT acvp_register(ACVP_CTX *ctx)
         return rv;
     }
 
-    if (ctx->debug == ACVP_LOG_LVL_STATUS) {
+    if (ctx->debug >= ACVP_LOG_LVL_STATUS) {
         printf("\nPOST %s\n", reg);
     } else {
         ACVP_LOG_INFO("POST %s", reg);
@@ -3536,7 +4291,6 @@ static ACVP_RESULT acvp_process_vsid(ACVP_CTX *ctx, int vs_id)
     return ACVP_SUCCESS;
 }
 
-
 /*
  * This function is used to invoke the appropriate handler function
  * for a given ACV operation.  The operation is specified in the
@@ -3831,7 +4585,122 @@ ACVP_RESULT acvp_enable_kdf135_snmp_cap(
     return (acvp_append_kdf135_snmp_caps_entry(ctx, cap, crypto_handler));
 }
 
+static ACVP_RESULT acvp_append_kdf135_ssh_caps_entry(
+       ACVP_CTX *ctx,
+       ACVP_KDF135_SSH_CAP *cap,
+       ACVP_RESULT (*crypto_handler)(ACVP_TEST_CASE *test_case))
+{
+    ACVP_CAPS_LIST *cap_entry, *cap_e2;
 
+    cap_entry = calloc(1, sizeof(ACVP_CAPS_LIST));
+    if (!cap_entry) {
+        return ACVP_MALLOC_FAIL;
+    }
+    cap_entry->cipher = ACVP_KDF135_SSH;
+    cap_entry->cap.kdf135_ssh_cap = cap;
+    cap_entry->crypto_handler = crypto_handler;
+    cap_entry->cap_type = ACVP_KDF135_SSH_TYPE;
+
+    if (!ctx->caps_list) {
+        ctx->caps_list = cap_entry;
+    } else {
+        cap_e2 = ctx->caps_list;
+        while (cap_e2->next) {
+            cap_e2 = cap_e2->next;
+        }
+        cap_e2->next = cap_entry;
+    }
+    return ACVP_SUCCESS;
+}
+
+ACVP_RESULT acvp_enable_kdf135_ssh_cap(
+          ACVP_CTX *ctx,
+          ACVP_RESULT (*crypto_handler)(ACVP_TEST_CASE *test_case))
+{
+    ACVP_KDF135_SSH_CAP *cap;
+
+    if (!ctx) {
+        return ACVP_NO_CTX;
+    }
+    if (!crypto_handler) {
+        return ACVP_INVALID_ARG;
+    }
+
+    cap = calloc(1, sizeof(ACVP_KDF135_SSH_CAP));
+    if (!cap) {
+        return ACVP_MALLOC_FAIL;
+    }
+
+    return (acvp_append_kdf135_ssh_caps_entry(ctx, cap, crypto_handler));
+}
+
+static
+ACVP_RESULT acvp_validate_kdf135_ssh_param_value(ACVP_KDF135_SSH_METHOD method, ACVP_KDF135_SSH_CAP_PARM param) {
+    ACVP_RESULT retval = ACVP_INVALID_ARG;
+
+    if ((method < ACVP_SSH_METH_MAX) && (method > 0)) {
+        if ((param & ACVP_KDF135_SSH_CAP_SHA256) ||
+            (param & ACVP_KDF135_SSH_CAP_SHA384) ||
+            (param & ACVP_KDF135_SSH_CAP_SHA512) ) {
+            retval = ACVP_SUCCESS;
+        }
+    }
+    return retval;
+}
+
+/*
+ * The user should call this after invoking acvp_enable_kdf135_ssh_cap()
+ * to specify the kdf parameters.
+ */
+ACVP_RESULT acvp_enable_kdf135_ssh_cap_parm(
+                          ACVP_CTX *ctx,
+                          ACVP_CIPHER kcap,
+                          ACVP_KDF135_SSH_METHOD method,
+                          ACVP_KDF135_SSH_CAP_PARM param) {
+
+    ACVP_CAPS_LIST *cap;
+    ACVP_KDF135_SSH_CAP *kdf135_ssh_cap;
+
+    if (!ctx) {
+        return ACVP_NO_CTX;
+    }
+
+    cap = acvp_locate_cap_entry(ctx, kcap);
+    if (!cap) {
+        return ACVP_NO_CAP;
+    }
+
+    kdf135_ssh_cap = cap->cap.kdf135_ssh_cap;
+    if (!kdf135_ssh_cap) {
+        return ACVP_NO_CAP;
+    }
+
+    if (acvp_validate_kdf135_ssh_param_value(method, param) != ACVP_SUCCESS) {
+        return ACVP_INVALID_ARG;
+    }
+
+    /* only support two method types so just use whichever is available */
+    switch(method) {
+    case ACVP_SSH_METH_TDES_CBC:
+        kdf135_ssh_cap->method[0] = ACVP_SSH_METH_TDES_CBC;
+        break;
+    case ACVP_SSH_METH_AES_128_CBC:
+        kdf135_ssh_cap->method[1] = ACVP_SSH_METH_AES_128_CBC;
+        break;
+    case ACVP_SSH_METH_AES_192_CBC:
+        kdf135_ssh_cap->method[2] = ACVP_SSH_METH_AES_192_CBC;
+        break;
+    case ACVP_SSH_METH_AES_256_CBC:
+        kdf135_ssh_cap->method[3] = ACVP_SSH_METH_AES_256_CBC;
+        break;
+    default:
+        return ACVP_INVALID_ARG;
+    }
+
+    kdf135_ssh_cap->sha = kdf135_ssh_cap->sha | param;
+
+    return ACVP_SUCCESS;
+}
 
 /*
  * Append an DSA capability to the

@@ -1,5 +1,5 @@
 /*****************************************************************************
-* Copyright (c) 2016, Cisco Systems, Inc.
+* Copyright (c) 2016-2017, Cisco Systems, Inc.
 * All rights reserved.
 
 * Redistribution and use in source and binary forms, with or without modification,
@@ -28,7 +28,7 @@
 
 #include "parson.h"
 
-#define ACVP_VERSION    "0.3"
+#define ACVP_VERSION    "0.4"
 
 #ifndef ACVP_LOG_INFO
 #define ACVP_LOG_INFO(format, args ...) do { \
@@ -58,7 +58,7 @@
 } while (0)
 #endif
 
-#define ACVP_ALG_MAX 52  /* Used by alg_tbl[] */
+#define ACVP_ALG_MAX 53  /* Used by alg_tbl[] */
 
 #define ACVP_ALG_AES_ECB             "AES-ECB"
 #define ACVP_ALG_AES_CBC             "AES-CBC"
@@ -114,8 +114,14 @@
 #define ACVP_DSA_PQGGEN              "pqgGen"
 
 #define ACVP_ALG_RSA                 "RSA"
-#define ACVP_RSA_KEYGEN              "keyGen"
+
+#define ACVP_RSA_KEYGEN         	 "keyGen"
+#define ACVP_RSA_SIGGEN         	 "sigGen"
 #define ACVP_RSA_SIGVER              "sigVer"
+#define ACVP_RSA_HASHALG_OBJ_NAME  "hashAlg"
+#define ACVP_RSA_SALTLEN_OBJ_NAME  "saltLen"
+#define ACVP_RSA_SIG_MSG_OBJ_NAME  "message"
+#define ACVP_RSA_SIG_MODULO_OBJ_NAME  "modulo"
 
 #define ACVP_DRBG_MODE_SHA_1         "SHA-1"
 #define ACVP_DRBG_MODE_SHA_224       "SHA-224"
@@ -136,6 +142,7 @@
 
 #define ACVP_ALG_KDF135_TLS	     "KDF-TLS"
 #define ACVP_ALG_KDF135_SNMP     "KDF-SNMP"
+#define ACVP_ALG_KDF135_SSH      "KDF-SSH"
 
 #define ACVP_SYM_KEY_MAX    64
 #define ACVP_SYM_PT_MAX     1024
@@ -154,6 +161,7 @@
 #define ACVP_HASH_MD_MAX        64
 
 #define ACVP_KDF135_TLS_MSG_MAX 1024*4
+#define ACVP_KDF135_SSH_MSG_MAX 1024
 
 #define ACVP_HMAC_MSG_MAX       1024
 #define ACVP_HMAC_MAC_MAX       64
@@ -167,6 +175,8 @@
 #define ACVP_DSA_SEED_MAX       128
 
 #define ACVP_RSA_SEEDLEN_MAX    64
+
+#define RSA_SIG_TYPE_MAX_LEN   	9
 
 #define ACVP_KAT_BUF_MAX        1024*1024*4
 #define ACVP_REG_BUF_MAX        1024*128
@@ -232,11 +242,15 @@ typedef struct acvp_kdf135_snmp_capability {
 
 } ACVP_KDF135_SNMP_CAP;
 
+typedef struct acvp_kdf135_ssh_capability {
+    int           method[4];
+    int           sha;
+} ACVP_KDF135_SSH_CAP;
+
 typedef struct acvp_hmac_capability {
-    int                       key_range_1[2];      //":"65536"
-    int                       key_range_2[2];      //":"65536"
-    int                       key_block;        // boolean
-    ACVP_SL_LIST              *mac_len;
+    int                       key_len_min;      // 8-524288
+    int                       key_len_max;      // 8-524288
+    ACVP_SL_LIST              *mac_len;         // 32-512
 } ACVP_HMAC_CAP;
 
 typedef struct acvp_cmac_capability {
@@ -300,12 +314,24 @@ typedef struct acvp_name_list_t {
    struct acvp_name_list_t *next;
 } ACVP_NAME_LIST;
 
+typedef struct acvp_salt_t {
+   int saltVal;
+   struct acvp_salt_t *next;
+} ACVP_SALT_SIZES; // supported salt sizes list
+
 typedef struct acvp_rsa_primes_list {
    int modulo; // 2048, 3072, 4096 -- defined as macros
    ACVP_NAME_LIST *hash_algs;
    ACVP_NAME_LIST *prime_tests;
    struct acvp_rsa_primes_list *next;
 } ACVP_RSA_PRIMES_LIST;
+
+typedef struct acvp_rsa_cap_sig_type {
+   int mod_rsa_sig; // 2048, 3072, 4096 -- defined as macros
+   ACVP_NAME_LIST *compatible_hashes_sig;
+   ACVP_SALT_SIZES *salt_sig; // 28, 32, 64 -- when sigType = "PKCS1PSS"
+   struct acvp_rsa_cap_sig_type *next;
+} ACVP_RSA_CAP_SIG_TYPE;
 
 typedef struct acvp_rsa_keygen_attrs_t {
     ACVP_RSA_MODE   mode;                    // "keyGen"
@@ -316,10 +342,24 @@ typedef struct acvp_rsa_keygen_attrs_t {
     ACVP_RSA_PRIMES_LIST *cap_primes_list;
 } ACVP_RSA_KEYGEN_ATTRS;
 
+typedef struct acvp_rsa_mode_siggen_t {
+    ACVP_RSA_MODE   mode;  // "sigGen"
+    char *sig_type; // "X9.31", "PKCS1v1.5", "PKCS1PSS"
+    ACVP_RSA_CAP_SIG_TYPE *cap_sig_type; //holds modRSASigGen (int) and hashSigGen (list)
+} ACVP_RSA_SIGGEN_ATTRS;
+
+typedef struct acvp_rsa_mode_sigver_t {
+    ACVP_RSA_MODE   mode;  // "sigVer"
+    char *sig_type; // "X9.31", "PKCS1v1.5", "PKCS1PSS"
+    ACVP_RSA_CAP_SIG_TYPE *cap_sig_type; //holds modRSASigVer (int) and hashSigVer (list)
+} ACVP_RSA_SIGVER_ATTRS;
+
 typedef struct acvp_rsa_cap_mode_list_t {
     ACVP_RSA_MODE cap_mode;
     union {
         ACVP_RSA_KEYGEN_ATTRS *keygen;
+        ACVP_RSA_SIGGEN_ATTRS *siggen;
+        ACVP_RSA_SIGVER_ATTRS *sigver;
     } cap_mode_attrs;
     struct acvp_rsa_cap_mode_list_t *next;
 } ACVP_RSA_CAP_MODE_LIST;
@@ -357,6 +397,7 @@ typedef struct acvp_dsa_capability {
 typedef struct acvp_caps_list_t {
     ACVP_CIPHER       cipher;
     ACVP_CAP_TYPE     cap_type;
+    int               has_prereq;    /* used to indicate algorithm can have prereqs */
     ACVP_PREREQ_LIST *prereq_vals;
     union {
       ACVP_SYM_CIPHER_CAP   *sym_cap;
@@ -368,6 +409,7 @@ typedef struct acvp_caps_list_t {
       ACVP_RSA_CAP          *rsa_cap;
       ACVP_KDF135_TLS_CAP   *kdf135_tls_cap;
       ACVP_KDF135_SNMP_CAP  *kdf135_snmp_cap;
+      ACVP_KDF135_SSH_CAP   *kdf135_ssh_cap;
     //TODO: add other cipher types
     } cap;
     ACVP_RESULT (*crypto_handler)(ACVP_TEST_CASE *test_case);
@@ -424,7 +466,8 @@ ACVP_RESULT acvp_submit_vector_responses(ACVP_CTX *ctx);
 void acvp_log_msg (ACVP_CTX *ctx, ACVP_LOG_LVL level, const char *format, ...);
 ACVP_RESULT acvp_hexstr_to_bin(const unsigned char *src, unsigned char *dest, int dest_max);
 ACVP_RESULT acvp_bin_to_hexstr(const unsigned char *src, unsigned int src_len, unsigned char *dest);
-
+ACVP_RESULT acvp_bin_to_bit(const unsigned char *in, int len, unsigned char *out);
+ACVP_RESULT acvp_bit_to_bin(const unsigned char *in, int len, unsigned char *out);
 /*
  * These are the handler routines for each KAT operation
  */
@@ -439,6 +482,7 @@ ACVP_RESULT acvp_cmac_kat_handler(ACVP_CTX *ctx, JSON_Object *obj);
 ACVP_RESULT acvp_rsa_kat_handler(ACVP_CTX *ctx, JSON_Object *obj);
 ACVP_RESULT acvp_kdf135_tls_kat_handler(ACVP_CTX *ctx, JSON_Object *obj);
 ACVP_RESULT acvp_kdf135_snmp_kat_handler(ACVP_CTX *ctx, JSON_Object *obj);
+ACVP_RESULT acvp_kdf135_ssh_kat_handler(ACVP_CTX *ctx, JSON_Object *obj);
 ACVP_RESULT acvp_dsa_kat_handler(ACVP_CTX *ctx, JSON_Object *obj);
 
 /*
@@ -450,7 +494,9 @@ ACVP_CIPHER acvp_lookup_cipher_index(const char *algorithm);
 ACVP_DRBG_MODE acvp_lookup_drbg_mode_index(const char *mode);
 ACVP_DRBG_CAP_MODE_LIST* acvp_locate_drbg_mode_entry(ACVP_CAPS_LIST *cap, ACVP_DRBG_MODE mode);
 ACVP_RSA_MODE acvp_lookup_rsa_mode_index(char *mode);
+ACVP_RSA_CAP_MODE_LIST* acvp_locate_rsa_sig_type_entry(ACVP_CTX *ctx, ACVP_CAPS_LIST *cap, ACVP_RSA_MODE mode, ACVP_RSA_SIG_TYPE sig_type);
 ACVP_RSA_CAP_MODE_LIST* acvp_locate_rsa_mode_entry(ACVP_CAPS_LIST *cap, ACVP_RSA_MODE mode);
+char *acvp_rsa_get_sig_type_name(ACVP_RSA_SIG_TYPE sig_type);
 char *acvp_lookup_rsa_randpq_name(int value);
 int acvp_lookup_rsa_randpq_index(char *value);
 unsigned int yes_or_no(ACVP_CTX *ctx, const char *text);
