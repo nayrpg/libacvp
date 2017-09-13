@@ -763,8 +763,6 @@ int main(int argc, char **argv)
 #endif
 
 #ifdef ACVP_NO_RUNTIME
-
-#if 0 /* until RSA is supported on the server side */
     /*
      * Enable RSA keygen...
      */
@@ -969,7 +967,6 @@ int main(int argc, char **argv)
     CHECK_ENABLE_CAP_RV(rv);
     rv = acvp_enable_rsa_cap_sig_type_salt_parm(ctx, ACVP_RSA, ACVP_RSA_MODE_SIGVER, RSA_SIG_TYPE_PKCS1PSS, MOD_RSA_4096, ACVP_RSA_SHA_512, RSA_SALT_SIGGEN_64);
     CHECK_ENABLE_CAP_RV(rv);
-#endif
 
 #if 0  /* until drbg is supported by the server */
     /*
@@ -1158,21 +1155,24 @@ int main(int argc, char **argv)
 #endif
 #endif
 
+
+    rv = acvp_register(ctx);
+    acvp_process_injected_vsid(ctx,"test1.JSON");
     /*
      * Now that we have a test session, we register with
      * the server to advertise our capabilities and receive
      * the KAT vector sets the server demands that we process.
      */
-    rv = acvp_register(ctx);
+   /* rv = acvp_register(ctx);
     if (rv != ACVP_SUCCESS) {
         printf("Failed to register with ACVP server (rv=%d)\n", rv);
         exit(1);
     }
 
-    /*
+
      * Now we process the test cases given to us during
      * registration earlier.
-     */
+
     rv = acvp_process_tests(ctx);
     if (rv != ACVP_SUCCESS) {
         printf("Failed to process vectors (%d)\n", rv);
@@ -1184,7 +1184,7 @@ int main(int argc, char **argv)
     if (rv != ACVP_SUCCESS) {
         printf("Unable to retrieve test results (%d)\n", rv);
         exit(1);
-    }
+    }*/
     /*
      * Finally, we free the test session context and cleanup
      */

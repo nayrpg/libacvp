@@ -1307,6 +1307,7 @@ ACVP_RESULT acvp_register(ACVP_CTX *ctx);
  */
 ACVP_RESULT acvp_process_tests(ACVP_CTX *ctx);
 
+ACVP_RESULT acvp_process_injected_vsid(ACVP_CTX *ctx,char* filename);
 /*! @brief acvp_set_vendor_info() specifies the vendor attributes
     for the test session.
 
